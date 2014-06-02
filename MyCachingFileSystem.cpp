@@ -188,7 +188,7 @@ static string caching_fullpath(string src)
  */
 int caching_getattr(const char *path, struct stat *statbuf)
 {
-	debug("in getattr. got path, gave fullpath:");
+//	debug("in getattr. got path, gave fullpath:");
     int retstat = 0;
     string fpath = caching_fullpath(path);
     retstat = lstat(fpath.c_str(), statbuf);
@@ -215,7 +215,7 @@ int caching_getattr(const char *path, struct stat *statbuf)
  */
 int caching_fgetattr(const char *path, struct stat *statbuf, struct fuse_file_info *fi)
 {
-	debug("in fgetattr");
+//	debug("in fgetattr");
 	int retstat = 0;
     retstat = fstat(fi->fh, statbuf);
     if (retstat < 0)
@@ -238,7 +238,7 @@ int caching_fgetattr(const char *path, struct stat *statbuf, struct fuse_file_in
  */
 int caching_access(const char *path, int mask)
 {
-	debug("in access");
+//	debug("in access");
     int retstat = 0;
     string fpath = caching_fullpath(path);
 
@@ -265,7 +265,7 @@ int caching_access(const char *path, int mask)
  */
 int caching_open(const char *path, struct fuse_file_info *fi)
 {
-	debug("in open");
+//	debug("in open");
     int retstat = 0;
     int fd;
     string fpath = caching_fullpath(path);
@@ -292,7 +292,8 @@ void insert_block(string fn, size_t pos, Block& b)
 	debug("insert_block");
 	BlockKey bk = BlockKey(fn, pos);
 	CACHING_DATA->cache.emplace(bk,b);
-	CACHING_DATA->queue.insert(BlockKeyPtr(&bk));
+	BlockKeyPtr* bkp = new BlockKeyPtr(&bk);
+	CACHING_DATA->queue.insert(*bkp);
 }
 
 void erase_block(BlockKeyPtr bkp)
@@ -317,24 +318,68 @@ void erase_block(BlockKeyPtr bkp)
 
 void add_to_cache(string path, size_t pos, Block b)
 {
-	debug("adding to cache");
-	BlockKey bk(path, pos);
+	debug("adding to cache. path, pos:");
+	debug(path);
+	debug(to_string(pos));
+
+	BlockKey bk = *((BlockKey*) new BlockKey(path, pos));
+
+	if (CACHING_DATA->queue.size() > 0)
+	{
+		//set<BlockKeyPtr>::iterator bkp_it = CACHING_DATA->queue.begin();
+		BlockKeyPtr created_bkp = *(CACHING_DATA->queue.begin());
+		BlockKeyPtr input_bkp = BlockKeyPtr(&bk);
+		bool same = input_bkp == created_bkp;
+		string s1 = (*input_bkp.ptr)();
+		string s2 = (*created_bkp.ptr)();
+		debug("S1");
+		debug(s1);
+		debug("S2");
+		debug(s2);
+		debug("Same is: ");
+		debug(to_string(same));
+	}
 
 	if(CACHING_DATA->cache.size() < CACHING_DATA->n_blocks)
 	{
 		debug("Space left in cache, adding");
+
+		debug("(0) queue size, cache size:");
+		debug(to_string(CACHING_DATA->queue.size()));
+		debug(to_string(CACHING_DATA->cache.size()));
+
 		CACHING_DATA->cache.emplace(bk,b);
 		CACHING_DATA->queue.insert(BlockKeyPtr(&bk));
+
+		debug("(0.5) queue size, cache size:");
+		debug(to_string(CACHING_DATA->queue.size()));
+		debug(to_string(CACHING_DATA->cache.size()));
 	}
 	else
 	{
+
 		debug("NO SPACE IN CACHE, erase and add");
+
+		debug("(1) queue size, cache size:");
+		debug(to_string(CACHING_DATA->queue.size()));
+		debug(to_string(CACHING_DATA->cache.size()));
+
 //		erase_block(*CACHING_DATA->queue.begin());
 		set<BlockKeyPtr>::iterator bkp_it = CACHING_DATA->queue.begin();
+		debug("GGGGG");
 		BlockKey bk = *(*bkp_it).ptr;
+		debug(bk());
 		CACHING_DATA->queue.erase(bkp_it);
 		CACHING_DATA->cache.erase(bk);
+
+		debug("(2) queue size, cache size:");
+		debug(to_string(CACHING_DATA->queue.size()));
+		debug(to_string(CACHING_DATA->cache.size()));
+
 		insert_block(path, pos, b);
+		debug("(3) queue size, cache size:");
+		debug(to_string(CACHING_DATA->queue.size()));
+		debug(to_string(CACHING_DATA->cache.size()));
 	}
 }
 
@@ -398,7 +443,7 @@ int caching_read(const char *path, char *buf, size_t size, off_t offset,
 	{
 		debug("in while. start pos is:");
 		debug(to_string(start_pos));
-		BlockKey bk = BlockKey{path, start_pos};
+		BlockKey bk = BlockKey(path, start_pos);
 		unordered_map<BlockKey, Block>::iterator it = CACHING_DATA->cache.find(bk);
 
 		if (it != CACHING_DATA->cache.end())
@@ -421,7 +466,7 @@ int caching_read(const char *path, char *buf, size_t size, off_t offset,
 			size_t block_end_pos = min<size_t>(block_size, offset + size - start_pos);
 			size_t data_size = block_end_pos - block_start_pos;
 
-			debug("HERE1");
+//			debug("HERE1");
 			memcpy(buff_idx, b.data + block_start_pos, data_size);
 			//TODO: check memcpy error
 			buff_idx += data_size;
@@ -430,7 +475,7 @@ int caching_read(const char *path, char *buf, size_t size, off_t offset,
 			// Update block time
 			gettimeofday(&b.time, NULL);
 
-			debug("HERE2");
+//			debug("HERE2");
 			start_pos += block_size;
 			// Update the queue
 			CACHING_DATA->queue.erase(BlockKeyPtr(&bk));
@@ -518,7 +563,7 @@ int caching_read(const char *path, char *buf, size_t size, off_t offset,
  */
 int caching_flush(const char *path, struct fuse_file_info *fi)
 {
-	debug("in flush");
+//	debug("in flush");
 	return 0;
 }
 
@@ -538,7 +583,7 @@ int caching_flush(const char *path, struct fuse_file_info *fi)
  */
 int caching_release(const char *path, struct fuse_file_info *fi)
 {
-	debug("in release");
+//	debug("in release");
 	return close(fi->fh);
 }
 
@@ -551,7 +596,7 @@ int caching_release(const char *path, struct fuse_file_info *fi)
  */
 int caching_opendir(const char *path, struct fuse_file_info *fi)
 {
-	debug("in opendir");
+//	debug("in opendir");
     DIR *dp;
     int retstat = 0;
     string fpath = caching_fullpath(path);
@@ -591,7 +636,7 @@ int caching_opendir(const char *path, struct fuse_file_info *fi)
 int caching_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset,
 					struct fuse_file_info *fi)
 {
-	debug("in readdir");
+//	debug("in readdir");
     int retstat = 0;
     DIR *dp;
     struct dirent *de;
@@ -632,7 +677,7 @@ int caching_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t o
  */
 int caching_releasedir(const char *path, struct fuse_file_info *fi)
 {
-	debug("in releasedir");
+//	debug("in releasedir");
 	int retstat = 0;
     closedir((DIR *) (uintptr_t) fi->fh);
     return retstat;
@@ -777,18 +822,6 @@ int main(int argc, char* argv[])
 	caching_data->block_size = atoi(argv[4]);
 	caching_data->n_blocks = atoi(argv[3]);
 
-//	char* mountdir = argv[2];
-//
-//	char* argv2[4];
-//	argv2[0] = argv[0];
-//	argv2[1] = (char*) "-f";
-//	argv2[2] = (char*) "-s";
-//	argv2[3] = mountdir;
-//
-//	argc = 4;
-
-//	argv[1] = argv[2];
-
 	argv[3] = argv[2];
 	for (int i = 4; i< (argc - 1); i++){
 		argv[i] = NULL;
@@ -804,17 +837,6 @@ int main(int argc, char* argv[])
 	int fuse_stat = fuse_main(argc, argv, &caching_oper, caching_data);
 	return fuse_stat;
 }
-
-
-
-
-
-
-
-
-
-
-
 
 
 
