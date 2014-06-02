@@ -16,7 +16,7 @@
 #include <limits.h>
 #include <stdlib.h>
 #include <stdio.h>
-#include "string"
+#include <string>
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/xattr.h>
@@ -46,18 +46,20 @@ static const string ERROR_LOG = "system error: couldn't open ioctloutput.log fil
 
 #define LOG_FILE_NAME "ioctloutput.log"
 
+#define ALLIGN_OFFSET 4096
 
 #define CACHING_DATA ((struct caching_state *) fuse_get_context()->private_data)
 
 struct BlockKey
 {
+	string fn;
+	size_t pos;
+
 	BlockKey(string name, size_t position)
 	{
 		fn = name;
 		pos = position;
 	}
-	string fn;
-	size_t pos;
 
 	string operator()() const
 	{
@@ -86,19 +88,26 @@ namespace std
 
 struct Block
 {
+
+	char* data;
+	size_t size;
+	timeval time;
+
 	Block(char* data, size_t size)
 	{
 		this->data = data;
 		this->size = size;
+		gettimeofday(&this->time, NULL);
 	}
-	char* data;
-	size_t size;
-	timeval* time;
 };
 
 struct BlockKeyPtr
 {
 	BlockKey* ptr;
+	BlockKeyPtr(BlockKey* bk_ptr)
+	{
+		ptr = bk_ptr;
+	}
 	bool operator<(const BlockKeyPtr& rhs) const;
 	bool operator==(const BlockKeyPtr& rhs) const;
 };
@@ -108,17 +117,20 @@ struct caching_state
 {
 	unordered_map<BlockKey, Block> cache;
 	set<BlockKeyPtr> queue;
-	int n_blocks;
-	int block_size;
+	size_t n_blocks;
+	size_t block_size;
 	string rootdir;
 	FILE* logfile;
 };
 
 bool BlockKeyPtr::operator<(const BlockKeyPtr& rhs) const
 {
-	timeval* t1 = (CACHING_DATA->cache[*ptr]).time;
-	timeval* t2 = (CACHING_DATA->cache[*rhs.ptr]).time;
-	return timercmp(t1, t2, <);
+	unordered_map<BlockKey, Block>::iterator it1, it2;
+	it1 = CACHING_DATA->cache.find(*this->ptr);
+	it2 = CACHING_DATA->cache.find(*rhs.ptr);
+	timeval t1 = it1->second.time;
+	timeval t2 = it2->second.time;
+	return timercmp(&t1, &t2, <);
 }
 
 bool BlockKeyPtr::operator==(const BlockKeyPtr& rhs) const
@@ -145,6 +157,7 @@ void error_system()
 
 void debug(string msg)
 {
+	cout << msg << endl;
 	msg += '\n';
 	fprintf(CACHING_DATA->logfile, msg.c_str());
 }
@@ -160,12 +173,11 @@ static string caching_fullpath(string src)
 {
 	string res = CACHING_DATA->rootdir;
 	res += src;
-
-	debug("in caching_fullpath. res is:");
-	debug(res);
-
+	if (res.length() > PATH_MAX)
+	{
+		res.resize(PATH_MAX);
+	}
 	return res;
-
 }
 
 /** Get file attributes.
@@ -176,7 +188,6 @@ static string caching_fullpath(string src)
  */
 int caching_getattr(const char *path, struct stat *statbuf)
 {
-	debug("in getattr");
     int retstat = 0;
     string fpath = caching_fullpath(path);
     retstat = lstat(fpath.c_str(), statbuf);
@@ -201,7 +212,6 @@ int caching_getattr(const char *path, struct stat *statbuf)
  */
 int caching_fgetattr(const char *path, struct stat *statbuf, struct fuse_file_info *fi)
 {
-	debug("in fgetattr");
 	int retstat = 0;
     retstat = fstat(fi->fh, statbuf);
     if (retstat < 0)
@@ -266,6 +276,37 @@ int caching_open(const char *path, struct fuse_file_info *fi){
     return retstat;
 }
 
+/**
+ * Assumes block's time is correct.
+ *
+ */
+void insert_block(string fn, size_t pos, Block& b)
+{
+	BlockKey bk = BlockKey(fn, pos);
+	CACHING_DATA->cache.emplace(bk,b);
+	CACHING_DATA->queue.insert(BlockKeyPtr(&bk));
+}
+
+void erase_block(BlockKey& bk)
+{
+	CACHING_DATA->cache.erase(bk);
+	CACHING_DATA->queue.erase(BlockKeyPtr(&bk));
+}
+
+void add_to_cache(string path, size_t pos, Block b)
+{
+	BlockKey bk(path, pos);
+	if(CACHING_DATA->cache.size() < CACHING_DATA->n_blocks)
+	{
+		CACHING_DATA->cache.emplace(bk,b);
+	}
+	else
+	{
+		erase_block(*(*CACHING_DATA->queue.begin()).ptr);
+		insert_block(path, pos, b);
+	}
+}
+
 
 /** Read data from an open file
  *
@@ -281,52 +322,115 @@ int caching_open(const char *path, struct fuse_file_info *fi){
 int caching_read(const char *path, char *buf, size_t size, off_t offset,
 				 struct fuse_file_info *fi)
 {
-	int retstat;
+	debug("started read");
+	int retstat = 0;
 
-//	int block_size = CACHING_DATA->block_size;
+	size_t block_size = CACHING_DATA->block_size;
 
-	int start_pos = offset - (offset % block_size);
-	int end_pos = offset + size - ( (offset + size) % block_size);
+	debug("block size is:");
+	debug(to_string(block_size));
 
-	while (start_pos <= end_pos)
+	debug("requested size:");
+	debug(to_string(size));
+
+	debug("req offset:");
+	debug(to_string(offset));
+
+
+	// Start of first block (relative to file)
+	size_t start_pos = offset - (offset % block_size);
+
+	// Start of last block (relative to file)
+	size_t end_pos = offset + size - ( (offset + size) % block_size);
+
+	debug("end pos:");
+	debug(to_string(end_pos));
+
+	char* buff_idx = buf;
+
+	while (start_pos < end_pos)
 	{
-		int buff_idx = 0;
+		debug("in while. start pos is:");
+		debug(to_string(start_pos));
 		BlockKey bk = BlockKey{path, start_pos};
 		unordered_map<BlockKey, Block>::iterator it = CACHING_DATA->cache.find(bk);
+
 		if (it != CACHING_DATA->cache.end())
 		{
+			debug("in if");
 			// Block exists in cache.
 			// return its data, and update the timestamp.
 
 			Block& b = it->second;
-			int block_size = b.size;
+			block_size = b.size;
 
-			int block_start_pos = max(0, (int) offset - start_pos);
-			int block_end_pos = min(block_size, end_pos + block_size - ((int) offset + (int) size));
-			int data_size = block_end_pos - block_start_pos;
+			// Find the relevant index range inside the current block.
+			// This is mostly for handling the first and last block.
+			size_t block_start_pos = ((size_t) offset > start_pos) ? (offset - start_pos) : 0;
+			size_t block_end_pos = min<size_t>(block_size, end_pos + block_size - ( offset +  size));
+			size_t data_size = block_end_pos - block_start_pos;
 
-			memcpy(buf + buff_idx, b.data + block_start_pos, data_size);
+			memcpy(buff_idx, b.data + block_start_pos, data_size);
+			//TODO: check memcpy error
+			buff_idx += data_size;
 
-			gettimeofday(b.time, NULL);
+			// TODO: methodize!
+			// Update block time
+			gettimeofday(&b.time, NULL);
 
+			start_pos += block_size;
 			// Update the queue
 			CACHING_DATA->queue.erase(BlockKeyPtr(&bk));
 			CACHING_DATA->queue.insert(BlockKeyPtr(&bk));
+			//
+			debug("end if");
 		}
 		else
 		{
+			debug("in else. creating new block");
 			// Read from disk, add to cache
+			size_t block_start_pos = ((size_t) offset > start_pos) ? (offset - start_pos) : 0;
+			size_t block_end_pos = min<size_t>(block_size, end_pos + block_size - ( offset +  size));
+			size_t data_size = block_end_pos - block_start_pos;
 
+			debug("req offset:");
+			debug(to_string(offset));
+			debug("block_start_pos is:");
+			debug(to_string(block_start_pos));
+			debug("block_end_pos is:");
+			debug(to_string(block_end_pos));
+			debug("wanted data size is:");
+			debug(to_string(data_size));
 
+			void* data_ptr;
+//			debug("here1");
+			posix_memalign(&data_ptr, ALLIGN_OFFSET, data_size);
+
+//			debug("here2");
+			data_size = pread(fi->fh, data_ptr, data_size, start_pos);
+			debug("read X bytes with content Y:");
+			debug(to_string(data_size));
+			string str((char*) data_ptr, data_size);
+			debug(str);
+
+//			debug("here3");
+			//TODO: check pread error
+			Block b((char*) data_ptr, data_size);
+
+//			debug("here4");
+			memcpy(buff_idx, b.data + block_start_pos, data_size);
+//			debug("here5");
+			//TODO: check memcpy error
+
+			add_to_cache(path, start_pos, b);
+			buff_idx += data_size;
+			start_pos += block_size;
+			debug("end else");
 		}
 	}
-
-
-	//
-	retstat = pread(fi->fh, buf, size, offset);
-	//
 	return retstat;
 }
+
 
 /** Possibly flush cached data
  *
@@ -387,8 +491,6 @@ int caching_opendir(const char *path, struct fuse_file_info *fi)
     int retstat = 0;
     string fpath = caching_fullpath(path);
 
-    debug("in opendir. trying to read dir: ");
-    debug(fpath);
     dp = opendir(fpath.c_str());
     if (!dp)
     {
@@ -435,7 +537,6 @@ int caching_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t o
     // error; near as I can tell, that's the only condition under
     // which I can get an error from readdir()
 
-    debug("in readdir");
     de = readdir(dp);
     if (de == 0)
     {
@@ -470,18 +571,7 @@ int caching_releasedir(const char *path, struct fuse_file_info *fi){
     return retstat;
 }
 
-void insert_block(string fn, size_t pos, Block& b)
-{
-	BlockKey bk = BlockKey(fn, pos);
-	CACHING_DATA->cache.emplace(bk, b);
-	CACHING_DATA->queue.insert(BlockKeyPtr(bk));
-}
 
-void erase_block(BlockKey bk)
-{
-	CACHING_DATA->cache.erase(bk);
-	CACHING_DATA->queue.erase(BlockKeyPtr(bk));
-}
 
 /** Rename a file */
 int caching_rename(const char *path, const char *newpath)
@@ -500,9 +590,10 @@ int caching_rename(const char *path, const char *newpath)
 		unordered_map<BlockKey, Block>::iterator it = CACHING_DATA->cache.begin();
 		while(it != CACHING_DATA->cache.end())
 		{
-			BlockKey& bk = it->first;
+			BlockKey bk = it->first;
 			if (bk.fn == path)
 			{
+				// Copy block
 				Block b = it->second;
 				erase_block(bk);
 				insert_block(path, bk.pos, b);
@@ -511,9 +602,6 @@ int caching_rename(const char *path, const char *newpath)
 	}
 	return retstat;
 }
-
-
-
 
 /**
  * Initialize filesystem
@@ -529,7 +617,6 @@ void *caching_init(struct fuse_conn_info *conn)
 {
 	return CACHING_DATA;
 }
-
 
 /**
  * Clean up filesystem
@@ -587,7 +674,6 @@ int main(int argc, char* argv[])
 	caching_oper.unlink = NULL;
 	caching_oper.rmdir = NULL;
 	caching_oper.symlink = NULL;
-//	caching_oper.rename = NULL;
 	caching_oper.link = NULL;
 	caching_oper.chmod = NULL;
 	caching_oper.chown = NULL;
@@ -616,8 +702,9 @@ int main(int argc, char* argv[])
 		return CODE_FAIL;
 	}
 
-
 	caching_data->rootdir = argv[1];
+	caching_data->block_size = atoi(argv[4]);
+	caching_data->n_blocks = atoi(argv[3]);
 
 //	char* mountdir = argv[2];
 //
@@ -630,11 +717,14 @@ int main(int argc, char* argv[])
 //	argc = 4;
 
 //	argv[1] = argv[2];
-	for (int i = 3; i< (argc - 1); i++){
+
+	argv[3] = argv[2];
+	for (int i = 4; i< (argc - 1); i++){
 		argv[i] = NULL;
 	}
 	argv[1] = (char*) "-s";
-	argc = 3;
+	argv[2] = (char*) "-f";
+	argc = 4;
 
 	FILE* logfile;
 	logfile = fopen(LOG_FILE_NAME, "a");
