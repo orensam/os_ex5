@@ -1,6 +1,6 @@
-# Makefile for OS Project3: outputdevice.cpp
+# Makefile for OS Project 5: MyCachingFileSystem
 
-TAR = ex4.tar
+TAR = ex5.tar
 TAR_CMD = tar cvf
 CC = g++ -std=c++11 -Wall `pkg-config fuse --cflags --libs`
 
@@ -10,7 +10,7 @@ MyCachingFileSystem: MyCachingFileSystem.cpp
 	$(CC) MyCachingFileSystem.cpp -o MyCachingFileSystem
 
 clean:
-	rm -f $(TAR)  
+	rm -f $(TAR) MyCachingFileSystem
 
 tar: MyCachingFileSystem.cpp Makefile README
 	$(TAR_CMD) $(TAR) MyCachingFileSystem.cpp Makefile README

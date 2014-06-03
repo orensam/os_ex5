@@ -1,20 +1,11 @@
-orensam
-yoniherzog
+orensam, yoniherzog
+Oren Samuel (200170694), Yoni Herzog (200299956)
 
-================
-=== OS - Ex4 ===
-================
+EX: 5
 
-Oren Samuel ID 200170694
-Yoni Herzog ID 200299956
-
-=== Included files ===
-
+FILES:
 MyCachingFileSystem.cpp - 
-
 Makefile -
-
 README - This file.
 
-=== Program Description ===
-
+REMARKS:
