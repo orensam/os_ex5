@@ -39,7 +39,7 @@ static const int CODE_FAIL = -1;
 static const int CODE_SUCCESS = 0;
 
 static const string ERROR_USAGE = "usage: MyCachingFileSystem rootdir mountdir numberOfBlocks blockSize";
-static const string ERROR_SYSTEM = "system error";
+static const string ERROR_SYSTEM = "error in";
 
 static const string ERROR_OPEN_LOG = "system error: couldn't open ioctloutput.log file";
 static const string ERROR_WRITE_LOG = "system error: couldn't write to ioctloutput.log file";
@@ -66,6 +66,8 @@ static string timeval_to_str(const timeval& tv)
 	ret += tmbuf2;
 	return ret;
 }
+
+
 
 struct BlockKey
 {
@@ -157,27 +159,36 @@ typedef struct BlockKey BlockKey;
 typedef struct Block Block;
 typedef struct caching_state caching_state;
 
-void log(string msg)
+void debug(string msg)
 {
-	msg += "\n";
-	fprintf(CACHING_DATA->logfile, msg.c_str());
+	cout << msg << endl;
+}
+
+void error_write_log()
+{
+	cerr << ERROR_WRITE_LOG << endl;
+}
+
+void log_msg(string msg)
+{
+	if (fprintf(CACHING_DATA->logfile, "%s\n", msg.c_str()) < 0)
+	{
+		error_write_log();
+	}
+	fflush(CACHING_DATA->logfile);
+}
+
+int error_system(string func_name)
+{
+	int ret = -errno;
+	string error_str = ERROR_SYSTEM + " " + func_name;
+	log_msg(error_str);
+	return ret;
 }
 
 void usage()
 {
-	log(ERROR_USAGE);
-}
-
-int error_system()
-{
-	int ret = -errno;
-	log(ERROR_SYSTEM);
-	return ret;
-}
-
-void debug(string msg)
-{
-	cout << msg << endl;
+	cout << ERROR_USAGE << endl;
 }
 
 void error_open_log()
@@ -185,10 +196,7 @@ void error_open_log()
 	cerr << ERROR_OPEN_LOG << endl;
 }
 
-void error_write_log()
-{
-	cerr << ERROR_WRITE_LOG << endl;
-}
+
 
 struct fuse_operations caching_oper;
 
@@ -203,6 +211,18 @@ static string caching_fullpath(string src)
 	return res;
 }
 
+static bool isdir(const string path)
+{
+	DIR* dir = opendir(path.c_str());
+	if (dir)
+	{
+	    // Directory exists.
+	    closedir(dir);
+	    return true;
+	}
+	// Directory does not exist or can't be opened
+	return false;
+}
 
 /** Get file attributes.
  *
@@ -224,7 +244,7 @@ int caching_getattr(const char *path, struct stat *statbuf)
     retstat = lstat(fpath.c_str(), statbuf);
     if (retstat != 0)
     {
-		retstat = error_system();
+		retstat = error_system("caching_getattr");
     }
     return retstat;
 }
@@ -248,7 +268,7 @@ int caching_fgetattr(const char *path, struct stat *statbuf, struct fuse_file_in
     retstat = fstat(fi->fh, statbuf);
     if (retstat < 0)
     {
-    	retstat = error_system();
+    	retstat = error_system("caching_fgetattr");
     }
     return retstat;
 }
@@ -274,7 +294,7 @@ int caching_access(const char *path, int mask)
 
     if (retstat < 0)
     {
-		retstat = error_system();
+		retstat = error_system("caching_access");
     }
     return retstat;
 }
@@ -292,15 +312,15 @@ int caching_access(const char *path, int mask)
  */
 int caching_open(const char *path, struct fuse_file_info *fi)
 {
-	debug("open");
     int retstat = 0;
     int fd;
     string fpath = caching_fullpath(path);
 
-    fd = open(fpath.c_str(), fi->flags|O_DIRECT|O_SYNC);
+//    fd = open(fpath.c_str(), fi->flags|O_DIRECT|O_SYNC);
+    fd = open(fpath.c_str(), fi->flags);
     if (fd < 0)
     {
-		retstat = error_system();
+		retstat = error_system("caching_open");
     }
     fi->fh = fd;
     return retstat;
@@ -418,7 +438,7 @@ int caching_read(const char *path, char *buf, size_t size, off_t offset,
 
 			if (!memcpy(buff_idx, b.data + block_start_pos, data_size))
 			{
-				error_system();
+				error_system("caching_read");
 				return CODE_FAIL;
 			}
 
@@ -427,7 +447,7 @@ int caching_read(const char *path, char *buf, size_t size, off_t offset,
 			// Update block time
 			if(gettimeofday(&b.time, NULL) < 0)
 			{
-				error_system();
+				error_system("caching_read");
 			}
 
 			start_pos += block_size;
@@ -444,18 +464,25 @@ int caching_read(const char *path, char *buf, size_t size, off_t offset,
 			size_t block_end_pos = min<size_t>(block_size, offset + size - start_pos);
 			size_t data_size = block_end_pos - block_start_pos;
 
-			char* data_ptr;
 
-			if(posix_memalign((void**)&data_ptr, ALLIGN_OFFSET, block_size) != CODE_SUCCESS)
+			char* data_ptr = (char *) malloc(block_size);
+			if (data_ptr == NULL)
 			{
-				error_system();
+				error_system("caching_read");
 				return CODE_FAIL;
 			}
+
+//			char* data_ptr;
+//			if(posix_memalign((void**)&data_ptr, ALLIGN_OFFSET, block_size) != CODE_SUCCESS)
+//			{
+//				error_system("caching_read");
+//				return CODE_FAIL;
+//			}
 
 			size_t read_size = pread(fi->fh, data_ptr, block_size, start_pos);
 			if (read_size < 0)
 			{
-				error_system();
+				error_system("caching_read");
 				free(data_ptr);
 				return CODE_FAIL;
 			}
@@ -539,7 +566,7 @@ int caching_opendir(const char *path, struct fuse_file_info *fi)
     dp = opendir(fpath.c_str());
     if (!dp)
     {
-		retstat = error_system();
+		retstat = error_system("caching_opendir");
     }
 
     fi->fh = (intptr_t) dp;
@@ -585,7 +612,7 @@ int caching_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t o
     de = readdir(dp);
     if (de == 0)
     {
-    	return error_system();
+    	return error_system("caching_readdir");
     }
 
     // This will copy the entire directory into the buffer.  The loop exits
@@ -614,7 +641,7 @@ int caching_releasedir(const char *path, struct fuse_file_info *fi)
 	int retstat = closedir((DIR *) (uintptr_t) fi->fh);
 	if(retstat != CODE_SUCCESS)
 	{
-		return error_system();
+		return error_system("caching_releasedir");
 	}
     return retstat;
 }
@@ -629,7 +656,7 @@ int caching_rename(const char *path, const char *newpath)
 
 	if (retstat < 0)
 	{
-		return error_system();
+		return error_system("caching_rename");
 	}
 
 	unordered_map<BlockKey, Block> blocks;
@@ -706,19 +733,19 @@ void caching_destroy(void *userdata)
  *
  * Introduced in version 2.8
  */
-int caching_ioctl (const char *, int cmd, void *arg, struct fuse_file_info *,
-				   unsigned int flags, void *data)
+int caching_ioctl(const char *, int cmd, void *arg, struct fuse_file_info *,
+				  unsigned int flags, void *data)
 {
-	debug("in ioctl");
+//	debug("in ioctl");
 	timeval now;
 
 	// Print the current time
 	if(gettimeofday(&now, NULL) < 0)
 	{
-		return error_system();
+		return error_system("caching_ioctl");
 	}
-	log(timeval_to_str(now));
-	debug(timeval_to_str(now));
+	log_msg(timeval_to_str(now));
+//	debug(timeval_to_str(now));
 
 	// If there are blocks in the cache, print them
 	if (CACHING_DATA->queue.size() > 0)
@@ -729,12 +756,14 @@ int caching_ioctl (const char *, int cmd, void *arg, struct fuse_file_info *,
 			BlockKey bk = *rit;
 			Block b = CACHING_DATA->cache.find(*rit)->second;
 			string line = bk.get_string() + "\t" + b.get_string();
-			log(line);
-			debug(line);
+			log_msg(line);
+//			debug(line);
 		}
 	}
 	return CODE_SUCCESS;
 }
+
+
 
 int main(int argc, char* argv[])
 {
@@ -785,31 +814,34 @@ int main(int argc, char* argv[])
 		return CODE_FAIL;
 	}
 
-	// Prepare the private_data
-	caching_state* caching_data = new caching_state();
-	if (caching_data == NULL) {
-		error_system();
+	// Open the log file
+	FILE* logfile;
+	logfile = fopen(LOG_FILE_NAME, "ab");
+	if (logfile == NULL)
+	{
+		error_open_log();
 		return CODE_FAIL;
 	}
 
-	// Open the log file
-	FILE* logfile;
-	logfile = fopen(LOG_FILE_NAME, "a");
-	if (!logfile)
-	{
-		error_open_log();
+	// Prepare the private_data
+	caching_state* caching_data = new caching_state();
+	if (caching_data == NULL) {
+		fprintf(logfile, "%s %s\n", ERROR_SYSTEM.c_str(), "main");
 		return CODE_FAIL;
 	}
 
 	// Add needed info to the private_data
 	caching_data->logfile = logfile;
 	caching_data->rootdir = argv[1];
+	string mountdir = argv[2];
 	caching_data->block_size = atoi(argv[4]);
 	caching_data->n_blocks = atoi(argv[3]);
 
-	// Check that input args make sense
-	if (caching_data->n_blocks < 0 ||
-	    (caching_data->n_blocks > 0 && caching_data->block_size <= 0))
+	// Check that input args make sense.
+	// Note: if atoi fails (e.g given number of blocks is not a number) it will return 0,
+	// So this handles that situation as well.
+	if (caching_data->n_blocks <= 0 || caching_data->block_size <= 0
+		|| !isdir(caching_data->rootdir) || !isdir(mountdir))
 	{
 		usage();
 		return CODE_FAIL;
