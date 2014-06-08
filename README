@@ -4,8 +4,65 @@ Oren Samuel (200170694), Yoni Herzog (200299956)
 EX: 5
 
 FILES:
-MyCachingFileSystem.cpp - 
-Makefile -
+
+MyCachingFileSystem.cpp - A simple single-threaded, read-only caching file system which uses FUSE,
+and implements an LRU caching algorithm.
+ 
+Makefile - Compiles MyCachingFileSystem.cpp into a fuse program.
+
 README - This file.
 
+
 REMARKS:
+
+Our program implements an LRU cache for a given directory, which enables the user
+to access the files in the directory in a much faster manner than regular disk access.
+The system is read-only.
+
+The user starts the program by invoking:
+
+MyCachingFileSystem <rootdir> <mountdir> <numberOfBlocks> <blockSize> [flag1, flag2, ...]
+
+After invokation, mountdir is a mirror image of rootdir, and fuse hooks onto the different
+filesystem operations and passes then through our program.
+The optional flags are Fuse flags, and are passed into Fuse's main function.
+
+The program's cache consists of <numberOfBlocks> blocks, <blockSize> bytes each.
+
+Block - A struct representing a block of data. Holds a char* pointing to the data, the data's size,
+    and a timeval holding the time last accessed. 
+    
+BlockKey - A struct representing a key to uniquely identify a block according to its name and 
+    position within the file. We made BlockKey hashable by implementing operator() and the hash 
+    template so it can be used as a key for a map. additionally, we implemented the operator < 
+    based on access time so it can be comparable and used in a set. 
+    
+We use an unordere_map<BlockKey,Block>, 'cache', to store the data and allow efficient access to 
+data by filename and position. 
+
+Additionally, we use a set<BlockKey>, 'queue', in order to efficiently retrieve the 
+Least Recently Used Block.
+
+When a user tries reading from a file, we check whether the corresponding block is saved in our 
+cache, if so, return the desired data and update the block's access time. Otherwise, we read from 
+the disk and save to the cache and then return the desired data. 
+When adding a block to the cache, in case the cache is full we retrieve the Least Recently Used 
+block in the cache and erase it to make room for the new block.
+
+Function overview:
+    most functions were either based on the implementation of bbfs or had an empty implementation.
+    relevant implementations include:
+    
+    caching_read() - mostly explained in the paragraph above. we always use posix_memalign to 
+        support the use of O_DIRECT flag. 
+    
+    caching_rename() - iterate over all cached files, update their name in the cache, update path in
+        rootdir. In case path is of a directory, change relevant prefix of all files within that 
+        directory.  
+    
+    caching_ioctl() - using the comparative properties of 'queue', efficiently iterate over all 
+        blockes in 'cache' according to access time in descending order.
+    
+Memory disposal is taken care of in the caching_destroy().        
+
+
