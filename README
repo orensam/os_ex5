@@ -63,6 +63,8 @@ Function overview:
     caching_ioctl() - using the comparative properties of 'queue', efficiently iterate over all 
         blockes in 'cache' according to access time in descending order.
     
-Memory disposal is taken care of in the caching_destroy().        
+Memory disposal is taken care of in the caching_destroy().
+
+We had a wonderful time doing this exercise, thank you so much for a such pleasant experience. :)         
 
 
