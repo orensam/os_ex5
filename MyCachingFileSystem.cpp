@@ -35,21 +35,29 @@
 
 using namespace std;
 
+// Return codes
 static const int CODE_FAIL = -1;
 static const int CODE_SUCCESS = 0;
 
+// Error messages
 static const string ERROR_USAGE = "usage: MyCachingFileSystem rootdir mountdir numberOfBlocks blockSize";
 static const string ERROR_SYSTEM = "error in";
-
 static const string ERROR_OPEN_LOG = "system error: couldn't open ioctloutput.log file";
 static const string ERROR_WRITE_LOG = "system error: couldn't write to ioctloutput.log file";
 
+// Filenames
 #define LOG_FILE_NAME "ioctloutput.log"
 
-#define ALLIGN_OFFSET 512
+// Allignment for posix_memallign
+#define ALLIGN_OFFSET 4096
 
+// Fuse's private data
 #define CACHING_DATA ((struct caching_state *) fuse_get_context()->private_data)
 
+/**
+ * Returns a string representation of the given timeval.
+ * The format is as specified in the exercise description.
+ */
 static string timeval_to_str(const timeval& tv)
 {
 	struct tm *nowtm;
@@ -67,8 +75,11 @@ static string timeval_to_str(const timeval& tv)
 	return ret;
 }
 
-
-
+/**
+ * A BlockKey which is a hashable key for a specific block.
+ * Used as a key in the cache's map, and as a value in the cache's queue.
+ * Contains a filename and the position within the file.
+ */
 struct BlockKey
 {
 	string fn;
@@ -76,6 +87,9 @@ struct BlockKey
 
 	BlockKey(string name, size_t position) : fn(name), pos(position){}
 
+	/**
+	 * Returns the BlockKey's representation, for caching purposes.
+	 */
 	string operator()() const
 	{
 		stringstream sstm;
@@ -83,20 +97,35 @@ struct BlockKey
 		return sstm.str();
 	}
 
+	/**
+	 * Returns true iff this block key is smaller that the other one.
+	 * (Older is smaller)
+	 */
 	bool operator<(const BlockKey& rhs) const;
+
+	/**
+	 * Returns true iff both BlockKeys refer to the same block.
+	 */
 	bool operator==(const BlockKey& rhs) const
 	{
 		return (*this)() == rhs();
 	}
 
+	/**
+	 * Sets the BlockKey's filename.
+	 */
 	void set_filename(string name)
 	{
 		fn = name;
 	}
 
+	/**
+	 * Returns the BlockKey's string representation.
+	 */
 	string get_string() const;
 };
 
+// Hashing for BlockKey
 namespace std
 {
 	template <>
@@ -109,6 +138,11 @@ namespace std
 	};
 }
 
+/**
+ * A Block object.
+ * Contains the actual data and its size, and the time
+ * it was last accessed.
+ */
 struct Block
 {
 	char* data;
@@ -122,9 +156,13 @@ struct Block
 		gettimeofday(&this->time, NULL);
 	}
 
+	/**
+	 * Returns the Block's string representation.
+	 */
 	string get_string() const;
 };
 
+// The struct for Fuse's private data.
 struct caching_state
 {
 	unordered_map<BlockKey, Block> cache;
@@ -155,20 +193,30 @@ bool BlockKey::operator<(const BlockKey& rhs) const
 	return timercmp(&t1, &t2, <);
 }
 
+// Define the types
 typedef struct BlockKey BlockKey;
 typedef struct Block Block;
 typedef struct caching_state caching_state;
 
+/**
+ * prints a message to cout.
+ */
 void debug(string msg)
 {
 	cout << msg << endl;
 }
 
+/**
+ * Outputs an error to cerr when failing to write to the log file
+ */
 void error_write_log()
 {
 	cerr << ERROR_WRITE_LOG << endl;
 }
 
+/**
+ * Logs given message into the log file.
+ */
 void log_msg(string msg)
 {
 	if (fprintf(CACHING_DATA->logfile, "%s\n", msg.c_str()) < 0)
@@ -178,6 +226,9 @@ void log_msg(string msg)
 	fflush(CACHING_DATA->logfile);
 }
 
+/**
+ * Outputs error message to the log file, and returns the needed errno
+ */
 int error_system(string func_name)
 {
 	int ret = -errno;
@@ -186,20 +237,29 @@ int error_system(string func_name)
 	return ret;
 }
 
+/**
+ * Outputs a usage message to cout when user calls the program with wrong parameters.
+ */
 void usage()
 {
 	cout << ERROR_USAGE << endl;
 }
 
+/**
+ * Outputs an error to cerr when failing to open the log file
+ */
 void error_open_log()
 {
 	cerr << ERROR_OPEN_LOG << endl;
 }
 
-
-
+// Fuse operations struct
 struct fuse_operations caching_oper;
 
+/**
+ * Returns the full path of the filename src in rootdir.
+ * Long paths will break.
+ */
 static string caching_fullpath(string src)
 {
 	string res = CACHING_DATA->rootdir;
@@ -211,6 +271,9 @@ static string caching_fullpath(string src)
 	return res;
 }
 
+/**
+ * Returns true iff given path is a directory (relative to mountdir)
+ */
 static bool isdir(const string path)
 {
 	DIR* dir = opendir(path.c_str());
@@ -232,14 +295,9 @@ static bool isdir(const string path)
  */
 int caching_getattr(const char *path, struct stat *statbuf)
 {
-//	debug("getattr");
     int retstat = 0;
 
     string fpath = caching_fullpath(path);
-
-//    debug("in getattr. path, fpath:");
-//    debug(path);
-//    debug(fpath);
 
     retstat = lstat(fpath.c_str(), statbuf);
     if (retstat != 0)
@@ -263,7 +321,6 @@ int caching_getattr(const char *path, struct stat *statbuf)
  */
 int caching_fgetattr(const char *path, struct stat *statbuf, struct fuse_file_info *fi)
 {
-//	debug("fgetattr");
 	int retstat = 0;
     retstat = fstat(fi->fh, statbuf);
     if (retstat < 0)
@@ -286,7 +343,6 @@ int caching_fgetattr(const char *path, struct stat *statbuf, struct fuse_file_in
  */
 int caching_access(const char *path, int mask)
 {
-//	debug("access");
     int retstat = 0;
     string fpath = caching_fullpath(path);
 
@@ -316,7 +372,6 @@ int caching_open(const char *path, struct fuse_file_info *fi)
     int fd;
     string fpath = caching_fullpath(path);
 
-//    fd = open(fpath.c_str(), fi->flags|O_DIRECT|O_SYNC);
     fd = open(fpath.c_str(), fi->flags);
     if (fd < 0)
     {
@@ -327,8 +382,8 @@ int caching_open(const char *path, struct fuse_file_info *fi)
 }
 
 /**
+ * Inserts the given BlockKey and associated Block to the cache.
  * Assumes block's time is correct.
- *
  */
 void insert_block(const BlockKey& bk, const Block& b)
 {
@@ -336,12 +391,19 @@ void insert_block(const BlockKey& bk, const Block& b)
 	CACHING_DATA->queue.insert(bk);
 }
 
+/**
+ * Erases the block specified bk from the cache.
+ */
 void erase_block(BlockKey bk)
 {
 	CACHING_DATA->queue.erase(bk);
 	CACHING_DATA->cache.erase(bk);
 }
 
+/**
+ * Creates new BlockKey and Block fron the given path, position, data pointer and size.
+ * Then adds them to the cache (set + map)
+ */
 void add_to_cache(string path, size_t pos, char* data_ptr, size_t data_size)
 {
 	BlockKey bk = BlockKey(path, pos);
@@ -366,6 +428,9 @@ void add_to_cache(string path, size_t pos, char* data_ptr, size_t data_size)
 	}
 }
 
+/**
+ * returns the filesize of the specified filename.
+ */
 ifstream::pos_type filesize(const char* filename)
 {
     std::ifstream in(filename, ifstream::in | ifstream::binary);
@@ -387,18 +452,8 @@ ifstream::pos_type filesize(const char* filename)
 int caching_read(const char *path, char *buf, size_t size, off_t offset,
 				 struct fuse_file_info *fi)
 {
-//	debug("started read");
 	size_t block_size = CACHING_DATA->block_size;
 	size_t u_offset = offset;
-
-//	debug("block size is:");
-//	debug(to_string(block_size));
-//
-//	debug("requested size:");
-//	debug(to_string(size));
-//
-//	debug("req offset:");
-//	debug(to_string(u_offset));
 
 	// Fix situations where requested size throws us after file end
 	string fpath = caching_fullpath(path);
@@ -418,8 +473,6 @@ int caching_read(const char *path, char *buf, size_t size, off_t offset,
 
 	while (start_pos <= end_pos)
 	{
-//		debug("in while. start pos is:");
-//		debug(to_string(start_pos));
 		BlockKey bk = BlockKey(path, start_pos);
 		unordered_map<BlockKey, Block>::iterator it = CACHING_DATA->cache.find(bk);
 
@@ -464,20 +517,12 @@ int caching_read(const char *path, char *buf, size_t size, off_t offset,
 			size_t block_end_pos = min<size_t>(block_size, offset + size - start_pos);
 			size_t data_size = block_end_pos - block_start_pos;
 
-
-			char* data_ptr = (char *) malloc(block_size);
-			if (data_ptr == NULL)
+			char* data_ptr;
+			if(posix_memalign((void**)&data_ptr, ALLIGN_OFFSET, block_size) != CODE_SUCCESS)
 			{
 				error_system("caching_read");
 				return CODE_FAIL;
 			}
-
-//			char* data_ptr;
-//			if(posix_memalign((void**)&data_ptr, ALLIGN_OFFSET, block_size) != CODE_SUCCESS)
-//			{
-//				error_system("caching_read");
-//				return CODE_FAIL;
-//			}
 
 			size_t read_size = pread(fi->fh, data_ptr, block_size, start_pos);
 			if (read_size < 0)
@@ -525,7 +570,6 @@ int caching_read(const char *path, char *buf, size_t size, off_t offset,
  */
 int caching_flush(const char *path, struct fuse_file_info *fi)
 {
-//	debug("flush");
 	return 0;
 }
 
@@ -545,7 +589,6 @@ int caching_flush(const char *path, struct fuse_file_info *fi)
  */
 int caching_release(const char *path, struct fuse_file_info *fi)
 {
-//	debug("release");
 	return close(fi->fh);
 }
 
@@ -558,7 +601,6 @@ int caching_release(const char *path, struct fuse_file_info *fi)
  */
 int caching_opendir(const char *path, struct fuse_file_info *fi)
 {
-//	debug("opendir");
     DIR *dp;
     int retstat = 0;
     string fpath = caching_fullpath(path);
@@ -598,7 +640,6 @@ int caching_opendir(const char *path, struct fuse_file_info *fi)
 int caching_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset,
 					struct fuse_file_info *fi)
 {
-//	debug("readdir");
     int retstat = 0;
     DIR *dp;
     struct dirent *de;
@@ -637,7 +678,6 @@ int caching_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t o
  */
 int caching_releasedir(const char *path, struct fuse_file_info *fi)
 {
-//	debug("releasedir");
 	int retstat = closedir((DIR *) (uintptr_t) fi->fh);
 	if(retstat != CODE_SUCCESS)
 	{
@@ -646,11 +686,18 @@ int caching_releasedir(const char *path, struct fuse_file_info *fi)
     return retstat;
 }
 
-/** Rename a file */
+/** Rename a file or directory*/
 int caching_rename(const char *path, const char *newpath)
 {
 	string fpath = caching_fullpath(path);
 	string fnewpath = caching_fullpath(newpath);
+
+	bool is_dir = isdir(fpath);
+	string path_dir = path;
+	if (is_dir)
+	{
+		path_dir += "/";
+	}
 
 	int retstat = rename(fpath.c_str(), fnewpath.c_str());
 
@@ -658,6 +705,7 @@ int caching_rename(const char *path, const char *newpath)
 	{
 		return error_system("caching_rename");
 	}
+
 
 	unordered_map<BlockKey, Block> blocks;
 
@@ -667,20 +715,39 @@ int caching_rename(const char *path, const char *newpath)
 	// First, save the old blocks into a temp map.
 	for(;it != CACHING_DATA->cache.end(); ++it)
 	{
+
 		BlockKey bk = it->first;
-		if (bk.fn == path)
+
+		if (is_dir && bk.fn.substr(0, path_dir.length()) == path_dir)
+		{
+			// file is in the requested directory
+			Block b = it->second;
+			blocks.emplace(bk, b);
+		}
+
+		else if (bk.fn == path_dir)
 		{
 			Block b = it->second;
 			blocks.emplace(bk, b);
 		}
 	}
 
-	// Now add erase then from the cache, and insert back after filename change
+	string newpath2 = newpath;
+
+	// Now erase from the cache, and insert back after filename change
 	for(it = blocks.begin(); it != blocks.end(); ++it)
 	{
 		BlockKey bk = it->first;
 		Block b = it->second;
 		erase_block(bk);
+
+		if (is_dir)
+		{
+			// Change file's prefix to match directory
+			string newpath_dir = newpath2;
+			newpath_dir += "/" + bk.fn.substr(path_dir.length());
+			newpath = newpath_dir.c_str();
+		}
 		bk.set_filename(newpath);
 		insert_block(bk, b);
 	}
@@ -713,11 +780,17 @@ void *caching_init(struct fuse_conn_info *conn)
 void caching_destroy(void *userdata)
 {
 	unordered_map<BlockKey, Block>::iterator it;
+
+	// Delete block data
 	for(it = CACHING_DATA->cache.begin(); it != CACHING_DATA->cache.end(); ++it)
 	{
 		free(it->second.data);
 	}
+
+	// Close log file
 	fclose(CACHING_DATA->logfile);
+
+	// Delete private data
 	delete CACHING_DATA;
 }
 
@@ -736,7 +809,6 @@ void caching_destroy(void *userdata)
 int caching_ioctl(const char *, int cmd, void *arg, struct fuse_file_info *,
 				  unsigned int flags, void *data)
 {
-//	debug("in ioctl");
 	timeval now;
 
 	// Print the current time
@@ -745,7 +817,6 @@ int caching_ioctl(const char *, int cmd, void *arg, struct fuse_file_info *,
 		return error_system("caching_ioctl");
 	}
 	log_msg(timeval_to_str(now));
-//	debug(timeval_to_str(now));
 
 	// If there are blocks in the cache, print them
 	if (CACHING_DATA->queue.size() > 0)
@@ -757,7 +828,6 @@ int caching_ioctl(const char *, int cmd, void *arg, struct fuse_file_info *,
 			Block b = CACHING_DATA->cache.find(*rit)->second;
 			string line = bk.get_string() + "\t" + b.get_string();
 			log_msg(line);
-//			debug(line);
 		}
 	}
 	return CODE_SUCCESS;
@@ -833,7 +903,7 @@ int main(int argc, char* argv[])
 	// Add needed info to the private_data
 	caching_data->logfile = logfile;
 	caching_data->rootdir = argv[1];
-	string mountdir = argv[2];
+	char* mountdir = argv[2];
 	caching_data->block_size = atoi(argv[4]);
 	caching_data->n_blocks = atoi(argv[3]);
 
@@ -847,14 +917,16 @@ int main(int argc, char* argv[])
 		return CODE_FAIL;
 	}
 
-	// Prepare argc, argv for fuse's main
-	argv[3] = argv[2];
-	for (int i = 4; i< (argc - 1); i++){
-		argv[i] = NULL;
+	// Prepare argc, argv for fuse's main, include input flags.
+	// Include -s flag by default, to avoid multithreading issues.
+	int i;
+	for(i = 5; i < argc; ++i)
+	{
+		argv[i-4] = argv[i];
 	}
-	argv[1] = (char*) "-s";
-	argv[2] = (char*) "-f";
-	argc = 4;
+	argv[i-4] = (char*) "-s";
+	argv[i-3] = mountdir;
+	argc -= 2;
 
 	// Start fuse
 	int fuse_stat = fuse_main(argc, argv, &caching_oper, caching_data);
